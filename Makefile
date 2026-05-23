@@ -1,23 +1,50 @@
-PR := stardict_to_dsl.exe
+# Имя программы
+NAME := stardict_to_dsl
 
-CPPFLAGS:=-std=c++11
-LDFLAGS:=-std=c++11 -lws2_32
+# Флаги оптимизации и компиляции
+CPPFLAGS := -std=c++11 -O3 -ffunction-sections -fdata-sections
+# Добавлен флаг -static для сборки статического бинарника под Linux
+LDFLAGS_LINUX := -std=c++11 -O3 -s -Wl,--gc-sections -flto -no-pie -static -static-libgcc -static-libstdc++
+LDFLAGS_WIN   := -std=c++11 -O3 -s -Wl,--gc-sections -flto -static -static-libgcc -static-libstdc++ -lws2_32
 
+# Исходники и заголовки
 HEADERS := $(wildcard *.h)
+SRC     := $(wildcard *.cpp)
 
-SRC := $(wildcard *.cpp)
-OBJ := $(notdir $(SRC:.cpp=.o))
+# Списки объектных файлов в подпапках сборки
+OBJ_LINUX   := $(patsubst %.cpp, build_linux/%.o, $(notdir $(SRC)))
+OBJ_WINDOWS := $(patsubst %.cpp, build_windows/%.o, $(notdir $(SRC)))
+
+.PHONY: all linux windows clean
+
+all: linux
+
+# --- СБОРКА ПОД LINUX (СТАТИЧЕСКАЯ) ---
+linux: build_linux $(NAME)
+
+$(NAME): $(OBJ_LINUX)
+	g++ $(OBJ_LINUX) -o $@ $(LDFLAGS_LINUX)
+
+build_linux/%.o: %.cpp $(HEADERS)
+	g++ $(CPPFLAGS) -c $< -o $@
+
+build_linux:
+	mkdir -p build_linux
 
 
-# ------------------------
+# --- КРОСС-КОМПИЛЯЦИЯ ПОД WINDOWS ---
+windows: build_windows $(NAME).exe
 
-all: $(PR)
+$(NAME).exe: $(OBJ_WINDOWS)
+	x86_64-w64-mingw32-g++ $(OBJ_WINDOWS) -o $@ $(LDFLAGS_WIN)
 
-$(PR): $(OBJ)
-	g++ -g $^ -o $@ $(LDFLAGS)
+build_windows/%.o: %.cpp $(HEADERS)
+	x86_64-w64-mingw32-g++ $(CPPFLAGS) -c $< -o $@
 
-%.o: %.cpp $(HEADERS)
-	g++ -o $@ $(CPPFLAGS) -c $<
+build_windows:
+	mkdir -p build_windows
 
+
+# --- ОЧИСТКА ---
 clean:
-	del /Q /S *.o *.exe
+	rm -rf build_linux build_windows $(NAME) $(NAME).exe

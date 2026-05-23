@@ -14,7 +14,7 @@ int main(int argc, char * argv []) {
   cout << "StarDict to DSL converter v" << VERSION << endl << endl;
   
   if (argc != 2) {
-    cout << "Usage: [EXE] [DICT_PATH].ifo\n";
+    cout << "Usage: [STARDICT_TO_DSL] [DICT_PATH].ifo\n";
   }
   else {
     convert_stardict_to_dsl(argv[1]);

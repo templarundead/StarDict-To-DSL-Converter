@@ -3,7 +3,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <winsock.h>
+#ifdef _WIN32
+    #include <winsock.h>
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+#endif
+
 // #include <netinet/in.h>
 
 #include <string>
