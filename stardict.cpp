@@ -12,15 +12,21 @@
     #include <unistd.h>
 #endif
 
-// #include <netinet/in.h>
-
 #include <string>
 #include <algorithm>
+#include <vector>
+#include <omp.h>
 
 #include "utils.h"
 
 using namespace std;
 
+// Структура для метаданных слова, чтобы распараллелить цикл
+struct WordEntry {
+    string word;
+    unsigned int offset;
+    unsigned int size;
+};
 
 static string getFileName(const string& s) {
   char sep = '/';
@@ -40,6 +46,7 @@ string getDictName(const char* ifoFileName) {
   
   char *buffer;
   FILE * pFile = fopen(ifoFileName, "r");
+  if (!pFile) return dictName;
   fseek(pFile, 0, SEEK_END);
   long lSize = ftell(pFile);
   rewind(pFile);
@@ -86,57 +93,69 @@ void convert_stardict_to_dsl(const char* ifoFileName) {
   char *idxbuffer_end = idxbuffer + idx_stats.st_size;
   FILE *idxFile;
   idxFile = fopen(idxFileName.c_str(), "rb");
-  fread(idxbuffer, 1, idx_stats.st_size, idxFile);
+  size_t read_idx = fread(idxbuffer, 1, idx_stats.st_size, idxFile);
   fclose(idxFile);
   
   char *dictbuffer = (char *) malloc(dict_stats.st_size);
   FILE *dictFile;
   dictFile = fopen(dictFileName.c_str(), "rb");
-  fread(dictbuffer, 1, dict_stats.st_size, dictFile);
+  size_t read_dict = fread(dictbuffer, 1, dict_stats.st_size, dictFile);
   fclose(dictFile);
   
+  // === Векторизация индекса (быстрый однопоточный проход)
+  vector<WordEntry> entries;
+  char *p = idxbuffer;
   
-  // === WRITE
+  while (p < idxbuffer_end) {
+    WordEntry entry;
+    int wordlen = strlen(p);
+    entry.word = string(p, wordlen);
+    p += wordlen + 1;
+    
+    entry.offset = ntohl(*reinterpret_cast<unsigned int *>(p));
+    p += sizeof(unsigned int);
+    
+    entry.size = ntohl(*reinterpret_cast<unsigned int *>(p));
+    p += sizeof(unsigned int);
+    
+    entries.push_back(entry);
+  }
+  
+  size_t total_words = entries.size();
+  vector<string> output_chunks(total_words);
+
+  // === ПАРАЛЛЕЛЬНАЯ ОБРАБОТКА (Тяжелый многопоточный блок)
+  // Распределяем обработку HTML строк по всем доступным ядрам процессора
+  #pragma omp parallel for schedule(dynamic, 100)
+  for (size_t i = 0; i < total_words; ++i) {
+    const WordEntry& entry = entries[i];
+    char* data = dictbuffer + entry.offset;
+    
+    string dataStr(data, entry.size);
+    dataStr = Utils::html_to_dsl(dataStr);
+    
+    // Формируем кусок DSL-статьи в памяти
+    output_chunks[i] = entry.word + "\n  " + dataStr + "\n\n";
+  }
+  
+  // === ЗАПИСЬ НА ДИСК (Однопоточный быстрый сброс упорядоченных данных)
   string outFileName = Utils::replace_string(ifoFileName, "\\.(ifo|IFO)$", "") + ".dsl";
   outFileName.replace(outFileName.length()-sizeof("ifo")+1, sizeof("ifo")-1, "dsl");
   printf("Writing to file: '%s'\n", outFileName.c_str());
   
   FILE *txtFile = fopen(outFileName.c_str(), "w");
-  char *p = idxbuffer;
-  int wordlen;
-  unsigned int offset, size;
-  char *data;
-  
-  string dictSourceLang = "English";
-  string dictTargetLang = "English";
-  string headerStr = "#NAME \"" + dictName + "\"\n#INDEX_LANGUAGE \"" + dictSourceLang + "\"\n#CONTENTS_LANGUAGE \"" + dictTargetLang + "\"\n\n";
-  fwrite(headerStr.c_str(), 1, headerStr.size(), txtFile);
-  
-  while (true) {
-    if (p == idxbuffer_end) break;
-
-    wordlen = strlen(p);
-    fwrite(p, wordlen, 1, txtFile);
-    fwrite("\n", 1, 1, txtFile);
-    p += wordlen + 1;
+  if (txtFile) {
+    string dictSourceLang = "English";
+    string dictTargetLang = "English";
+    string headerStr = "#NAME \"" + dictName + "\"\n#INDEX_LANGUAGE \"" + dictSourceLang + "\"\n#CONTENTS_LANGUAGE \"" + dictTargetLang + "\"\n\n";
+    fwrite(headerStr.c_str(), 1, headerStr.size(), txtFile);
     
-    offset = *reinterpret_cast<unsigned int *>(p);
-    offset = ntohl(offset);
-    p += sizeof(unsigned int);
-    size = *reinterpret_cast<unsigned int *>(p);
-    size = ntohl(size);
-    p += sizeof(unsigned int);
-    data = dictbuffer + offset;
-    
-    string dataStr(data, size);
-    dataStr = Utils::html_to_dsl(dataStr);
-    
-    fwrite("  ", 1, 2, txtFile);
-    fwrite(dataStr.c_str(), 1, dataStr.size(), txtFile);
-    fwrite("\n\n", 1, 2, txtFile);
+    for (size_t i = 0; i < total_words; ++i) {
+      fwrite(output_chunks[i].c_str(), 1, output_chunks[i].size(), txtFile);
+    }
+    fclose(txtFile);
   }
   
-  fclose(txtFile);
   free(idxbuffer);
   free(dictbuffer);
 }
